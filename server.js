@@ -1,12 +1,13 @@
-// Pin browsers into node_modules so install-time $HOME and runtime $HOME don't matter.
-// Must be set before any Playwright launch() call; a plain assignment is enough.
+// Set before Playwright's module is loaded. Playwright caches the browser
+// directory in an IIFE at import time, so this MUST run before any import
+// (direct or transitive) of 'playwright'. That is why check.js is loaded
+// with dynamic import() further down, rather than a static import.
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
 
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { runCheck } from './check.js';
 
 const require = createRequire(import.meta.url);
 
@@ -30,8 +31,9 @@ let lastRun = null;
 let lastError = null;
 let consecutiveErrors = 0;
 
-// The modern `playwright` package blocks `require.resolve('playwright/cli.js')` via
-// its `exports` field. Resolve package.json (always exported) and derive cli.js path.
+// The modern `playwright` package blocks `require.resolve('playwright/cli.js')`
+// via its `exports` field. Resolve package.json (always exported) and derive
+// cli.js path from its dirname.
 function getPlaywrightCli() {
   for (const name of ['playwright', 'playwright-core']) {
     try {
@@ -75,6 +77,10 @@ function ensureChromium() {
     });
   });
 }
+
+// Dynamically import check.js so PLAYWRIGHT_BROWSERS_PATH is already set in
+// process.env before Playwright's module-level IIFE resolves the browser dir.
+const { runCheck } = await import('./check.js');
 
 async function tick(reason = 'interval') {
   if (running) {
@@ -125,6 +131,7 @@ const server = createServer(async (req, res) => {
         lastRun,
         lastError,
         intervalMs: CHECK_INTERVAL_MS,
+        browsersPath: process.env.PLAYWRIGHT_BROWSERS_PATH,
       }),
     );
     return;
