@@ -78,7 +78,23 @@ async function findTramiteSelect(page) {
 
 async function readCalendarState(page) {
   return page.evaluate(() => {
-    const title = document.querySelector('.ui-datepicker-title');
+    const titleEl = document.querySelector('.ui-datepicker-title');
+    // The Junta's datepicker renders month/year as <select> elements inside
+    // .ui-datepicker-title. textContent on the container concatenates every
+    // <option>, yielding garbage like "AbrMayJun...202620272028". Prefer the
+    // selected option labels; fall back to plain textContent otherwise.
+    let title = null;
+    if (titleEl) {
+      const monthSel = titleEl.querySelector('select.ui-datepicker-month');
+      const yearSel = titleEl.querySelector('select.ui-datepicker-year');
+      const month = monthSel?.selectedOptions?.[0]?.textContent?.trim();
+      const year = yearSel?.selectedOptions?.[0]?.textContent?.trim();
+      if (month && year) {
+        title = `${month} ${year}`;
+      } else {
+        title = titleEl.textContent.trim().replace(/\s+/g, ' ');
+      }
+    }
     const cells = Array.from(document.querySelectorAll('.ui-datepicker-calendar td'));
     const clickable = cells
       .filter((td) => {
@@ -89,7 +105,7 @@ async function readCalendarState(page) {
       .map((td) => td.textContent.trim());
     const nextDisabled = !document.querySelector('.ui-datepicker-next:not(.ui-state-disabled)');
     return {
-      title: title ? title.textContent.trim().replace(/\s+/g, ' ') : null,
+      title,
       clickable,
       nextDisabled,
     };
