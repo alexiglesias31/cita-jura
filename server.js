@@ -4,7 +4,7 @@ import { runCheck } from './check.js';
 const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const CHECK_INTERVAL_MS = Number.parseInt(
-  process.env.CHECK_INTERVAL_MS ?? String(30 * 60 * 1000),
+  process.env.CHECK_INTERVAL_MS ?? String(15 * 60 * 1000),
   10,
 );
 const RUN_ON_START = process.env.RUN_ON_START !== 'false';
