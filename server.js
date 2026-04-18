@@ -1,13 +1,8 @@
-// Set before Playwright's module is loaded. Playwright caches the browser
-// directory in an IIFE at import time, so this MUST run before any import
-// (direct or transitive) of 'playwright'. That is why check.js is loaded
-// with dynamic import() further down, rather than a static import.
-process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
-
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { runCheck } from './check.js';
 
 const require = createRequire(import.meta.url);
 
@@ -77,10 +72,6 @@ function ensureChromium() {
     });
   });
 }
-
-// Dynamically import check.js so PLAYWRIGHT_BROWSERS_PATH is already set in
-// process.env before Playwright's module-level IIFE resolves the browser dir.
-const { runCheck } = await import('./check.js');
 
 async function tick(reason = 'interval') {
   if (running) {
@@ -154,7 +145,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, HOST, async () => {
-  log(`HTTP listening on ${HOST}:${PORT}. Interval=${CHECK_INTERVAL_MS}ms`);
+  log(`HTTP listening on ${HOST}:${PORT}. Interval=${CHECK_INTERVAL_MS}ms browsersPath=${process.env.PLAYWRIGHT_BROWSERS_PATH}`);
   await ensureChromium();
   browserReady = true;
   if (RUN_ON_START) tick('startup');
