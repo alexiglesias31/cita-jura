@@ -1,6 +1,11 @@
+// Pin browsers into node_modules so install-time $HOME and runtime $HOME don't matter.
+// Must be set before any Playwright launch() call; a plain assignment is enough.
+process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
+
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import { runCheck } from './check.js';
 
 const require = createRequire(import.meta.url);
@@ -25,6 +30,20 @@ let lastRun = null;
 let lastError = null;
 let consecutiveErrors = 0;
 
+// The modern `playwright` package blocks `require.resolve('playwright/cli.js')` via
+// its `exports` field. Resolve package.json (always exported) and derive cli.js path.
+function getPlaywrightCli() {
+  for (const name of ['playwright', 'playwright-core']) {
+    try {
+      const pkgPath = require.resolve(`${name}/package.json`);
+      return path.join(path.dirname(pkgPath), 'cli.js');
+    } catch {
+      // try next
+    }
+  }
+  return null;
+}
+
 function ensureChromium() {
   return new Promise((resolve) => {
     if (SKIP_BROWSER_INSTALL) {
@@ -32,15 +51,16 @@ function ensureChromium() {
       resolve();
       return;
     }
-    let cliPath;
-    try {
-      cliPath = require.resolve('playwright/cli.js');
-    } catch (err) {
-      log('Could not resolve playwright/cli.js:', err.message);
+    const cliPath = getPlaywrightCli();
+    if (!cliPath) {
+      log('Could not locate playwright CLI — will try to launch anyway.');
       resolve();
       return;
     }
-    log(`Ensuring Playwright Chromium via ${process.execPath} ${cliPath} install chromium`);
+    log(
+      `Ensuring Chromium: ${process.execPath} ${cliPath} install chromium ` +
+        `(PLAYWRIGHT_BROWSERS_PATH=${process.env.PLAYWRIGHT_BROWSERS_PATH})`,
+    );
     const child = spawn(process.execPath, [cliPath, 'install', 'chromium'], {
       stdio: 'inherit',
       env: process.env,
