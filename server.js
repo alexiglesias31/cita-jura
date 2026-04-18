@@ -1,6 +1,9 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { runCheck } from './check.js';
+
+const require = createRequire(import.meta.url);
 
 const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -29,8 +32,16 @@ function ensureChromium() {
       resolve();
       return;
     }
-    log('Ensuring Playwright Chromium is installed (no-op if already present)...');
-    const child = spawn('npx', ['playwright', 'install', 'chromium'], {
+    let cliPath;
+    try {
+      cliPath = require.resolve('playwright/cli.js');
+    } catch (err) {
+      log('Could not resolve playwright/cli.js:', err.message);
+      resolve();
+      return;
+    }
+    log(`Ensuring Playwright Chromium via ${process.execPath} ${cliPath} install chromium`);
+    const child = spawn(process.execPath, [cliPath, 'install', 'chromium'], {
       stdio: 'inherit',
       env: process.env,
     });
