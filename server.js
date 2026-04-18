@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
 import { runCheck } from './check.js';
 
 const PORT = Number.parseInt(process.env.PORT ?? '3000', 10);
@@ -9,19 +10,48 @@ const CHECK_INTERVAL_MS = Number.parseInt(
 );
 const RUN_ON_START = process.env.RUN_ON_START !== 'false';
 const TRIGGER_KEY = process.env.TRIGGER_KEY;
+const SKIP_BROWSER_INSTALL = process.env.SKIP_BROWSER_INSTALL === 'true';
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
 let running = false;
+let browserReady = false;
 let lastRun = null;
 let lastError = null;
 let consecutiveErrors = 0;
 
+function ensureChromium() {
+  return new Promise((resolve) => {
+    if (SKIP_BROWSER_INSTALL) {
+      log('Skipping playwright install (SKIP_BROWSER_INSTALL=true)');
+      resolve();
+      return;
+    }
+    log('Ensuring Playwright Chromium is installed (no-op if already present)...');
+    const child = spawn('npx', ['playwright', 'install', 'chromium'], {
+      stdio: 'inherit',
+      env: process.env,
+    });
+    child.on('exit', (code) => {
+      log(`playwright install exited with code ${code}`);
+      resolve();
+    });
+    child.on('error', (err) => {
+      log('playwright install spawn error:', err.message);
+      resolve();
+    });
+  });
+}
+
 async function tick(reason = 'interval') {
   if (running) {
     log(`[${reason}] skipped: a check is already running`);
+    return { skipped: true };
+  }
+  if (!browserReady) {
+    log(`[${reason}] skipped: browser not ready yet`);
     return { skipped: true };
   }
   running = true;
@@ -59,6 +89,7 @@ const server = createServer(async (req, res) => {
       JSON.stringify({
         ok: true,
         running,
+        browserReady,
         consecutiveErrors,
         lastRun,
         lastError,
@@ -76,7 +107,7 @@ const server = createServer(async (req, res) => {
     }
     tick('manual'); // fire and forget; checks take ~30s+
     res.writeHead(202, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ triggered: true, running }));
+    res.end(JSON.stringify({ triggered: true, running, browserReady }));
     return;
   }
 
@@ -84,8 +115,10 @@ const server = createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'not found' }));
 });
 
-server.listen(PORT, HOST, () => {
+server.listen(PORT, HOST, async () => {
   log(`HTTP listening on ${HOST}:${PORT}. Interval=${CHECK_INTERVAL_MS}ms`);
+  await ensureChromium();
+  browserReady = true;
   if (RUN_ON_START) tick('startup');
   setInterval(() => tick('interval'), CHECK_INTERVAL_MS);
 });
