@@ -4,8 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Checker de citas para Jura de Nacionalidad en el Registro Civil de Sevilla",
+  "main": "server.js",
   "scripts": {
-    "check": "node check.js"
+    "start": "node server.js",
+    "check": "node check.js",
+    "postinstall": "playwright install chromium || true"
   },
   "engines": {
     "node": ">=18"

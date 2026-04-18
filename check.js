@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const URL = 'https://www.juntadeandalucia.es/justicia/citaprevia/?idCliente=4';
 
@@ -9,6 +10,8 @@ const MAX_MONTHS = Number.parseInt(process.env.MAX_MONTHS ?? '6', 10);
 const HEADLESS = process.env.HEADLESS !== 'false';
 const DEBUG_DIR = process.env.DEBUG_DIR ?? 'debug';
 const SAVE_DEBUG = process.env.SAVE_DEBUG === 'true';
+// TEMP: force a Telegram message even when no slots are found, to verify the pipeline.
+const FORCE_NOTIFY = process.env.FORCE_NOTIFY === 'true';
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -130,7 +133,8 @@ async function saveDebug(page, name) {
   }
 }
 
-async function run() {
+export async function runCheck() {
+  const startedAt = new Date().toISOString();
   log(`Starting check. office="${OFFICE}" tramite="${TRAMITE}" months=${MAX_MONTHS} headless=${HEADLESS}`);
   const browser = await chromium.launch({ headless: HEADLESS });
   const context = await browser.newContext({
@@ -141,18 +145,17 @@ async function run() {
   });
   const page = await context.newPage();
   const found = [];
+  const monthsScanned = [];
 
   try {
     log(`Navigating to ${URL}`);
     await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 45000 });
 
-    // Step 1: select office
     const officeSelect = await findOfficeSelect(page);
     await officeSelect.waitFor({ state: 'visible', timeout: 30000 });
     log('Selecting office');
     await selectOptionByText(page, officeSelect, OFFICE);
 
-    // Trámite dropdown often re-populates after the office is picked.
     log('Waiting for trámite list to include desired option');
     await page.waitForFunction(
       (needle) => {
@@ -183,7 +186,6 @@ async function run() {
       .first();
     await continuar.click();
 
-    // Step 2: calendar
     log('Waiting for calendar');
     await page.waitForSelector('.ui-datepicker-calendar', { timeout: 45000 });
     await saveDebug(page, '02-calendar');
@@ -191,6 +193,7 @@ async function run() {
     for (let i = 0; i < MAX_MONTHS; i++) {
       const state = await readCalendarState(page);
       log(`Month ${state.title ?? '?'}: ${state.clickable.length} clickable day(s) [${state.clickable.join(', ')}]`);
+      monthsScanned.push({ title: state.title, clickable: state.clickable.slice() });
 
       for (const day of state.clickable) {
         const dayLink = page
@@ -238,9 +241,30 @@ async function run() {
         URL,
       ].join('\n');
       await notifyTelegram(message);
+    } else if (FORCE_NOTIFY) {
+      // TEMP: verify Telegram + scraping pipeline end-to-end.
+      const summary = monthsScanned
+        .map((m) => `• ${m.title ?? '?'}: ${m.clickable.length} días clicables`)
+        .join('\n');
+      const message = [
+        '🧪 <b>Test checker Jura Nacionalidad</b>',
+        'No hay huecos disponibles ahora mismo, pero el checker se ejecutó correctamente.',
+        '',
+        `<b>Oficina:</b> ${OFFICE}`,
+        `<b>Trámite:</b> ${TRAMITE}`,
+        `<b>Meses escaneados:</b> ${monthsScanned.length}`,
+        '',
+        summary || '(sin datos de calendario)',
+        '',
+        URL,
+      ].join('\n');
+      await notifyTelegram(message);
     } else {
       log('No available slots in the scanned range.');
     }
+
+    const finishedAt = new Date().toISOString();
+    return { startedAt, finishedAt, found, monthsScanned };
   } catch (err) {
     await saveDebug(page, 'error');
     throw err;
@@ -249,7 +273,10 @@ async function run() {
   }
 }
 
-run().catch((err) => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMain) {
+  runCheck().catch((err) => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
