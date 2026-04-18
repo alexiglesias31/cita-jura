@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { readdirSync, chmodSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { runCheck } from './check.js';
 
@@ -26,9 +27,6 @@ let lastRun = null;
 let lastError = null;
 let consecutiveErrors = 0;
 
-// The modern `playwright` package blocks `require.resolve('playwright/cli.js')`
-// via its `exports` field. Resolve package.json (always exported) and derive
-// cli.js path from its dirname.
 function getPlaywrightCli() {
   for (const name of ['playwright', 'playwright-core']) {
     try {
@@ -41,16 +39,71 @@ function getPlaywrightCli() {
   return null;
 }
 
+function getLocalBrowsersDir() {
+  try {
+    const pkgPath = require.resolve('playwright-core/package.json');
+    return path.join(path.dirname(pkgPath), '.local-browsers');
+  } catch {
+    return null;
+  }
+}
+
+// Hostinger's deploy copies files from the build dir to the runtime dir and
+// drops the +x bit in the process, so Chromium fails with EACCES even though
+// the binary exists. chmod 755 everything under .local-browsers recursively.
+function chmodBrowsers() {
+  const dir = getLocalBrowsersDir();
+  if (!dir) return;
+  let fileCount = 0;
+  let errorCount = 0;
+  const walk = (p) => {
+    let entries;
+    try {
+      entries = readdirSync(p, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(p, entry.name);
+      if (entry.isDirectory()) {
+        try {
+          chmodSync(full, 0o755);
+        } catch {
+          errorCount += 1;
+        }
+        walk(full);
+      } else if (entry.isFile() || entry.isSymbolicLink()) {
+        try {
+          chmodSync(full, 0o755);
+          fileCount += 1;
+        } catch {
+          errorCount += 1;
+        }
+      }
+    }
+  };
+  try {
+    statSync(dir);
+  } catch {
+    log(`No .local-browsers dir at ${dir}, skipping chmod`);
+    return;
+  }
+  walk(dir);
+  log(`chmod 755 applied to ${fileCount} files under ${dir} (errors=${errorCount})`);
+}
+
 function ensureChromium() {
   return new Promise((resolve) => {
     if (SKIP_BROWSER_INSTALL) {
       log('Skipping playwright install (SKIP_BROWSER_INSTALL=true)');
+      chmodBrowsers();
       resolve();
       return;
     }
     const cliPath = getPlaywrightCli();
     if (!cliPath) {
       log('Could not locate playwright CLI — will try to launch anyway.');
+      chmodBrowsers();
       resolve();
       return;
     }
@@ -64,10 +117,12 @@ function ensureChromium() {
     });
     child.on('exit', (code) => {
       log(`playwright install exited with code ${code}`);
+      chmodBrowsers();
       resolve();
     });
     child.on('error', (err) => {
       log('playwright install spawn error:', err.message);
+      chmodBrowsers();
       resolve();
     });
   });
