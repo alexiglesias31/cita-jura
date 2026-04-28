@@ -230,6 +230,12 @@ export async function runCheck() {
       .filter(Boolean)
       .join(':');
     process.env.FONTCONFIG_PATH = path.join(tmpDir, 'fonts');
+    // Playwright uses os.tmpdir() for the ephemeral user-data-dir. Default
+    // /tmp on CloudLinux is noexec and Chromium SIGSEGVs on mmap of profile
+    // .pak files. Redirect tmp to our execable dir.
+    process.env.TMPDIR = tmpDir;
+    process.env.TMP = tmpDir;
+    process.env.TEMP = tmpDir;
     const { default: sparticuzChromium } = await import('@sparticuz/chromium');
     log(
       `Sparticuz Chromium ready. exec=${localExec} ` +
