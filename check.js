@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Hostinger shared/cloud hosting (CloudLinux) lacks the system libraries that
@@ -161,8 +162,22 @@ export async function runCheck() {
   log(`Starting check. office="${OFFICE}" tramite="${TRAMITE}" months=${MAX_MONTHS} headless=${HEADLESS} sparticuz=${USE_SPARTICUZ}`);
   const launchOpts = { headless: HEADLESS };
   if (USE_SPARTICUZ) {
+    // Hostinger CloudLinux mounts /tmp with noexec, so @sparticuz/chromium
+    // can't run the binary it extracts there. Redirect TMPDIR to a writable
+    // and execable dir under the app root before importing sparticuz, then
+    // chmod 755 the resulting binary in case extraction strips +x.
+    const tmpDir = process.env.SPARTICUZ_TMPDIR ?? path.resolve('.tmp-chromium');
+    mkdirSync(tmpDir, { recursive: true });
+    process.env.TMPDIR = tmpDir;
     const { default: sparticuzChromium } = await import('@sparticuz/chromium');
-    launchOpts.executablePath = await sparticuzChromium.executablePath();
+    const execPath = await sparticuzChromium.executablePath();
+    try {
+      chmodSync(execPath, 0o755);
+    } catch (err) {
+      log(`chmod ${execPath} failed: ${err.message}`);
+    }
+    log(`Sparticuz Chromium at ${execPath} (TMPDIR=${tmpDir})`);
+    launchOpts.executablePath = execPath;
     launchOpts.args = sparticuzChromium.args;
   }
   const browser = await chromium.launch(launchOpts);
