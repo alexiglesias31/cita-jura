@@ -1,8 +1,9 @@
-name: Check citas
+name: Check citas (manual fallback)
 
+# Cron disabled — checker now runs as a Node.js app on Hostinger
+# (see README "Deploy en Hostinger"). This workflow stays around as a
+# manually-triggerable smoke test only.
 on:
-  schedule:
-    - cron: "0 * * * *"
   workflow_dispatch:
 
 jobs:

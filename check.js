@@ -2,6 +2,13 @@ import { chromium } from 'playwright';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+// Hostinger shared/cloud hosting (CloudLinux) lacks the system libraries that
+// Playwright's bundled Chromium needs. @sparticuz/chromium ships a portable
+// Chromium build with the required libs statically linked. Enable with
+// USE_SPARTICUZ=true in production; on local dev (Mac/Win) leave it unset and
+// Playwright uses its own bundled browser.
+const USE_SPARTICUZ = process.env.USE_SPARTICUZ === 'true';
+
 const URL = 'https://www.juntadeandalucia.es/justicia/citaprevia/?idCliente=4';
 
 const OFFICE = process.env.OFFICE_NAME ?? 'REGISTRO CIVIL EXCLUSIVO N.º 1 DE SEVILLA';
@@ -151,8 +158,14 @@ async function saveDebug(page, name) {
 
 export async function runCheck() {
   const startedAt = new Date().toISOString();
-  log(`Starting check. office="${OFFICE}" tramite="${TRAMITE}" months=${MAX_MONTHS} headless=${HEADLESS}`);
-  const browser = await chromium.launch({ headless: HEADLESS });
+  log(`Starting check. office="${OFFICE}" tramite="${TRAMITE}" months=${MAX_MONTHS} headless=${HEADLESS} sparticuz=${USE_SPARTICUZ}`);
+  const launchOpts = { headless: HEADLESS };
+  if (USE_SPARTICUZ) {
+    const { default: sparticuzChromium } = await import('@sparticuz/chromium');
+    launchOpts.executablePath = await sparticuzChromium.executablePath();
+    launchOpts.args = sparticuzChromium.args;
+  }
+  const browser = await chromium.launch(launchOpts);
   const context = await browser.newContext({
     locale: 'es-ES',
     viewport: { width: 1280, height: 900 },
