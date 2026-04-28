@@ -220,9 +220,17 @@ export async function runCheck() {
       extractTar(tarPath, destDir);
       rmSync(tarPath, { force: true });
     }
+    // Pick lib bundle. Hostinger / older CloudLinux runs glibc < 2.30, so
+    // al2023 libs (require GLIBC_2.30+) crash. al2 libs were built for
+    // Amazon Linux 2 (glibc 2.26) and load fine on older systems. Default
+    // to al2 first; SPARTICUZ_GLIBC=al2023 forces the newer bundle.
+    const glibcMode = process.env.SPARTICUZ_GLIBC ?? 'al2';
+    const libCandidates =
+      glibcMode === 'al2023'
+        ? [path.join(tmpDir, 'al2023', 'lib'), path.join(tmpDir, 'al2', 'lib')]
+        : [path.join(tmpDir, 'al2', 'lib')];
     process.env.LD_LIBRARY_PATH = [
-      path.join(tmpDir, 'al2023', 'lib'),
-      path.join(tmpDir, 'al2', 'lib'),
+      ...libCandidates,
       path.join(tmpDir, 'swiftshader'),
       tmpDir,
       process.env.LD_LIBRARY_PATH || '',
