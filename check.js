@@ -1,14 +1,37 @@
 import { chromium } from 'playwright';
 import {
   chmodSync,
-  copyFileSync,
-  cpSync,
+  createReadStream,
+  createWriteStream,
   existsSync,
   mkdirSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
+import { createBrotliDecompress } from 'node:zlib';
+
+const require = createRequire(import.meta.url);
+
+async function brotliDecompress(srcBr, dstFile) {
+  await pipeline(
+    createReadStream(srcBr),
+    createBrotliDecompress(),
+    createWriteStream(dstFile),
+  );
+}
+
+function extractTar(tarFile, destDir) {
+  mkdirSync(destDir, { recursive: true });
+  const r = spawnSync('tar', ['-xf', tarFile, '-C', destDir], { stdio: 'pipe' });
+  if (r.status !== 0) {
+    throw new Error(`tar -xf ${tarFile} failed: ${r.stderr?.toString() ?? ''}`);
+  }
+}
 
 // Hostinger shared/cloud hosting (CloudLinux) lacks the system libraries that
 // Playwright's bundled Chromium needs. @sparticuz/chromium ships a portable
@@ -170,47 +193,46 @@ export async function runCheck() {
   const launchOpts = { headless: HEADLESS };
   if (USE_SPARTICUZ) {
     // @sparticuz/chromium hardcodes extraction to /tmp (designed for AWS
-    // Lambda where only /tmp is writable). Hostinger CloudLinux mounts /tmp
-    // with noexec, so the extracted binary fails with EACCES on launch and
-    // .so files in /tmp can't be dlopen'd. Workaround: let sparticuz extract
-    // to /tmp, then mirror everything to a writable+execable dir under the
-    // app root, and override LD_LIBRARY_PATH/FONTCONFIG_PATH that sparticuz
-    // pointed at /tmp.
+    // Lambda) and Hostinger CloudLinux mounts /tmp with noexec. Worse,
+    // sparticuz early-returns when /tmp/chromium exists without re-extracting
+    // sibling lib dirs that Hostinger may have purged. So we bypass its
+    // extraction logic entirely and unpack the brotli/tar files shipped in
+    // the package directly into a writable+execable dir under the app root.
     const tmpDir = process.env.SPARTICUZ_TMPDIR ?? path.resolve('.tmp-chromium');
     mkdirSync(tmpDir, { recursive: true });
-    const { default: sparticuzChromium } = await import('@sparticuz/chromium');
-    const sparticuzExec = await sparticuzChromium.executablePath();
+    const sparticuzPkg = require.resolve('@sparticuz/chromium/package.json');
+    const sparticuzBin = path.join(path.dirname(sparticuzPkg), 'bin');
     const localExec = path.join(tmpDir, 'chromium');
     if (!existsSync(localExec)) {
-      log(`Mirroring Chromium ${sparticuzExec} -> ${localExec}`);
-      copyFileSync(sparticuzExec, localExec);
+      log(`Extracting chromium.br -> ${localExec}`);
+      await brotliDecompress(path.join(sparticuzBin, 'chromium.br'), localExec);
     }
-    try {
-      chmodSync(localExec, 0o755);
-    } catch (err) {
-      log(`chmod ${localExec} failed: ${err.message}`);
-    }
-    const sparticuzTmp = path.dirname(sparticuzExec);
-    for (const sibling of ['aws', 'al2', 'al2023', 'swiftshader', 'fonts']) {
-      const src = path.join(sparticuzTmp, sibling);
-      const dst = path.join(tmpDir, sibling);
-      if (existsSync(src) && !existsSync(dst)) {
-        log(`Mirroring ${src} -> ${dst}`);
-        cpSync(src, dst, { recursive: true });
-      }
+    chmodSync(localExec, 0o755);
+    for (const archive of ['al2023.tar.br', 'al2.tar.br', 'swiftshader.tar.br', 'fonts.tar.br']) {
+      const src = path.join(sparticuzBin, archive);
+      if (!existsSync(src)) continue;
+      const baseName = archive.replace(/\.tar\.br$/, '');
+      const destDir = path.join(tmpDir, baseName);
+      if (existsSync(destDir)) continue;
+      const tarPath = path.join(tmpDir, `${baseName}.tar`);
+      log(`Extracting ${archive} -> ${destDir}`);
+      await brotliDecompress(src, tarPath);
+      extractTar(tarPath, destDir);
+      rmSync(tarPath, { force: true });
     }
     process.env.LD_LIBRARY_PATH = [
       path.join(tmpDir, 'al2023', 'lib'),
       path.join(tmpDir, 'al2', 'lib'),
-      path.join(tmpDir, 'aws', 'lib'),
-      path.join(tmpDir, 'swiftshader', 'lib'),
+      path.join(tmpDir, 'swiftshader'),
+      tmpDir,
       process.env.LD_LIBRARY_PATH || '',
     ]
       .filter(Boolean)
       .join(':');
     process.env.FONTCONFIG_PATH = path.join(tmpDir, 'fonts');
+    const { default: sparticuzChromium } = await import('@sparticuz/chromium');
     log(
-      `Sparticuz Chromium relocated. exec=${localExec} ` +
+      `Sparticuz Chromium ready. exec=${localExec} ` +
         `LD_LIBRARY_PATH=${process.env.LD_LIBRARY_PATH}`,
     );
     launchOpts.executablePath = localExec;
