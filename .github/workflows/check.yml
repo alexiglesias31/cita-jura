@@ -1,6 +1,7 @@
 name: Check citas
 
 # Public repo → GitHub Actions are unlimited and free. Run every 7 min.
+# Cron registration touch: 2026-04-28
 on:
   schedule:
     - cron: "*/7 * * * *"
