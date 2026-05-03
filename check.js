@@ -114,6 +114,30 @@ async function findTramiteSelect(page) {
     .first();
 }
 
+async function checkErrorDialog(page) {
+  return page.evaluate(() => {
+    const msg = document.querySelector('#mensajeError');
+    const dialog = msg?.closest('.ui-dialog');
+    const visible = !!(dialog && getComputedStyle(dialog).display !== 'none');
+    return { visible, message: visible ? (msg.textContent || '').trim() : '' };
+  });
+}
+
+async function dismissDialogs(page) {
+  // jQuery UI leaves .ui-widget-overlay sitting on top of the page after an
+  // error popup; until it is removed, every subsequent click is intercepted.
+  // Close any visible dialog and wipe stray overlays.
+  await page.evaluate(() => {
+    document.querySelectorAll('.ui-dialog').forEach((d) => {
+      if (getComputedStyle(d).display === 'none') return;
+      const btn = d.querySelector('.ui-dialog-titlebar-close');
+      if (btn) btn.click();
+      else d.style.display = 'none';
+    });
+    document.querySelectorAll('.ui-widget-overlay').forEach((o) => o.remove());
+  });
+}
+
 async function readCalendarState(page) {
   return page.evaluate(() => {
     const titleEl = document.querySelector('.ui-datepicker-title');
@@ -306,7 +330,15 @@ export async function runCheck() {
     await page.waitForSelector('.ui-datepicker-calendar', { timeout: 45000 });
     await saveDebug(page, '02-calendar');
 
+    let lastTitle = null;
     for (let i = 0; i < MAX_MONTHS; i++) {
+      const errDialog = await checkErrorDialog(page);
+      if (errDialog.visible) {
+        log(`Site reported: "${errDialog.message}". Stopping scan.`);
+        await saveDebug(page, `dialog-${i}`);
+        await dismissDialogs(page);
+        break;
+      }
       const state = await readCalendarState(page);
       log(`Month ${state.title ?? '?'}: ${state.clickable.length} clickable day(s) [${state.clickable.join(', ')}]`);
       monthsScanned.push({ title: state.title, clickable: state.clickable.slice() });
@@ -338,8 +370,22 @@ export async function runCheck() {
       }
       const next = page.locator('.ui-datepicker-next:not(.ui-state-disabled)').first();
       if ((await next.count()) === 0) break;
-      await next.click();
+      lastTitle = state.title;
+      try {
+        await next.click({ timeout: 5000 });
+      } catch (err) {
+        log(`  next-month click intercepted (${err.message.split('\n')[0]}). Dismissing overlay.`);
+        await dismissDialogs(page);
+        const post = await checkErrorDialog(page);
+        if (post.visible) log(`  dialog after dismiss: "${post.message}"`);
+        break;
+      }
       await page.waitForTimeout(900);
+      const after = await readCalendarState(page);
+      if (after.title && after.title === lastTitle) {
+        log(`Calendar did not advance past ${lastTitle}. Stopping scan.`);
+        break;
+      }
     }
 
     if (found.length > 0) {
